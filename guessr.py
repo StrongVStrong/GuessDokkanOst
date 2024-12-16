@@ -148,7 +148,7 @@ class GameView(View):
         if top_players:
             leaderboard = "\n".join([f"{idx+1}. {player[0] if player[0] else 'No player'} - {player[1]} points" 
                                 for idx, player in enumerate(top_players)])
-            await self.ctx.send(f"**Leaderboard (Top 3):**\n{leaderboard}\n\n")
+            await self.ctx.send(f"**Leaderboard:**\n{leaderboard}\n\n")
         else:
             await self.ctx.send("No one participated")
 
@@ -165,13 +165,14 @@ async def on_ready():
 @bot.command()
 async def endless(ctx):
     """Starts the game if user is in a VC"""
-    global players_points, game_running
-    players_points = {}
-    global round_skipped
+    global players_points, game_running, players_interacted, round_skipped
     
     if game_running:  # Check if the game is already running
         await ctx.send("A game is already running. Please stop it first using /stop.")
         return
+    
+    players_interacted = set()
+    players_points = {}
     
     game_running = True  # Set the flag to True to start
     if ctx.author.voice:
@@ -219,11 +220,13 @@ async def endless(ctx):
 
 @bot.command()
 async def game(ctx):
-    global game_running
+    global game_running, players_interacted
     if game_running:
         await ctx.send("A game is already running. Please stop it first using /stop.")
         return
 
+    players_interacted = set()
+    
     game_running = True  # Set the flag to True to indicate the game is running
     """Starts the game if user is in a VC and asks how many rounds"""
     if ctx.author.voice:
@@ -305,6 +308,8 @@ async def start_game(ctx, voice_client, rounds):
 
     # Ensure no game-related messages are sent if the game was stopped
     if game_running:
+        game_running = False
+        
         await ctx.send(f"_ _ \nGame Over! {rounds} rounds completed.\n")
         
         # Announce the winner
@@ -314,20 +319,6 @@ async def start_game(ctx, voice_client, rounds):
         else:
             await ctx.send("No one scored any points.")
         
-        # Display top 3 leaderboard
-        top_players = get_top_players()
-
-        # Ensure there are always 3 places in the leaderboard, even if no players are there
-        if len(top_players) < 3:
-            # Fill missing places with blank placeholders
-            while len(top_players) < 3:
-                top_players.append(("", 0))  # Append an empty entry with 0 points
-
-        # Create the leaderboard string
-        leaderboard = "\n".join([f"{idx+1}. {player[0] if player[0] else 'No player'} - {player[1]} points" 
-                                for idx, player in enumerate(top_players)])
-
-        await ctx.send(f"**Leaderboard:**\n{leaderboard}\n\n")
 
     # Reset the game_running flag after the game ends
     game_running = False
