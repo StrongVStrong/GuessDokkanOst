@@ -70,6 +70,10 @@ class GameView(View):
         return callback
 
     async def handle_option(self, interaction, option):
+        if not game_running:  # Check again if the game is still running before proceeding
+            await interaction.response.send_message("The game has stopped. Please wait for the next game.", ephemeral=True)
+            return
+        
         if interaction.user.id in self.players_interacted:
             await interaction.response.send_message("You already answered!", ephemeral=True)
             return
@@ -86,17 +90,25 @@ class GameView(View):
         correct_song = os.path.basename(self.correct_answer)
         correct_song_name = os.path.splitext(correct_song)[0]
         
+        # Initialize total_points (before checking if the answer is correct or not)
+        total_points = players_points.get(interaction.user.name, 0)
+        
         if option == self.correct_answer:
             players_points[interaction.user.name] = players_points.get(interaction.user.name, 0) + int(points)
             self.correct_players.append(interaction.user.name)
-            await interaction.followup.send(f"Correct! You get {int(points)} points!", ephemeral=True)
+            # Send response with points for the current round and total points
+            total_points = players_points[interaction.user.name]
+            await interaction.followup.send(f"Correct! You get {int(points)} points! Your total points are now {total_points}.", ephemeral=True)
         else:
-            await interaction.followup.send(f"Wrong! The correct answer was {correct_song_name}.", ephemeral=True)
+            await interaction.followup.send(f"Wrong! The correct answer was {correct_song_name}.  Your total points are still {total_points}.", ephemeral=True)
 
         if len(self.players_interacted) == len(self.voice_channel_members) - 1:  # All members in VC have interacted
             await self.stop_round()
 
     async def stop_round(self):
+        if not game_running:  # Check if the game is still running before sending messages
+            return
+        
         # Disable all buttons
         for item in self.children:
             item.disabled = True
@@ -114,11 +126,18 @@ class GameView(View):
 
         # Display top 3 leaderboard
         top_players = get_top_players()
-        if top_players:
-            leaderboard = "_ _\n".join([f"{idx+1}. {player[0]} - {player[1]} points" for idx, player in enumerate(top_players)])
-            await self.ctx.send(f"**Leaderboard (Top 3):**\n{leaderboard}")
-        else:
-            await self.ctx.send("No points have been scored yet.")
+
+        # Ensure there are always 3 places in the leaderboard, even if no players are there
+        if len(top_players) < 3:
+            # Fill missing places with blank placeholders
+            while len(top_players) < 3:
+                top_players.append(("", 0))  # Append an empty entry with 0 points
+
+        # Create the leaderboard string
+        leaderboard = "\n".join([f"{idx+1}. {player[0] if player[0] else 'No player'} - {player[1]} points" 
+                                for idx, player in enumerate(top_players)])
+
+        await self.ctx.send(f"**Leaderboard:**\n{leaderboard}")
         
         # Stop the round and move on to the next
         self.stop()
@@ -180,6 +199,7 @@ async def endless(ctx):
             
             # Add a delay before starting the next round
             await asyncio.sleep(1)
+            
 
     else:
         await ctx.send("You need to be in a voice channel first!")
@@ -278,11 +298,18 @@ async def start_game(ctx, voice_client, rounds):
         
     # Display top 3 leaderboard
     top_players = get_top_players()
-    if top_players:
-        leaderboard = "\n".join([f"{idx+1}. {player[0]} - {player[1]} points" for idx, player in enumerate(top_players)])
-        await ctx.send(f"**Leaderboard (Top 3):**\n{leaderboard}")
-    else:
-        await ctx.send("No points have been scored yet.")
+
+    # Ensure there are always 3 places in the leaderboard, even if no players are there
+    if len(top_players) < 3:
+        # Fill missing places with blank placeholders
+        while len(top_players) < 3:
+            top_players.append(("", 0))  # Append an empty entry with 0 points
+
+    # Create the leaderboard string
+    leaderboard = "\n".join([f"{idx+1}. {player[0] if player[0] else 'No player'} - {player[1]} points" 
+                            for idx, player in enumerate(top_players)])
+
+    await ctx.send(f"**Leaderboard:**\n{leaderboard}")
 
     # Reset the game_running flag after the game ends
     game_running = False
@@ -319,10 +346,17 @@ async def stop(ctx):
         
     # Display top 3 leaderboard
     top_players = get_top_players()
-    if top_players:
-        leaderboard = "_ _\n".join([f"{idx+1}. {player[0]} - {player[1]} points" for idx, player in enumerate(top_players)])
-        await ctx.send(f"**Leaderboard (Top 3):**\n{leaderboard}")
-    else:
-        await ctx.send("No points have been scored yet.")
+
+    # Ensure there are always 3 places in the leaderboard, even if no players are there
+    if len(top_players) < 3:
+        # Fill missing places with blank placeholders
+        while len(top_players) < 3:
+            top_players.append(("", 0))  # Append an empty entry with 0 points
+
+    # Create the leaderboard string
+    leaderboard = "\n".join([f"{idx+1}. {player[0] if player[0] else 'No player'} - {player[1]} points" 
+                            for idx, player in enumerate(top_players)])
+
+    await ctx.send(f"**Leaderboard:**\n{leaderboard}")
 
 bot.run(BOT_TOKEN)  # Run the bot with your actual bot token
