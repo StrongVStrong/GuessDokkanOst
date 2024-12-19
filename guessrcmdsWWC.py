@@ -24,25 +24,30 @@ songs = [os.path.join(directory, f) for f in os.listdir(directory) if f.endswith
 
 # A dictionary to hold players' points
 players_points = {}
-round_skipped = False
-game_running = False # Flag to check if the game is currently running
-players_interacted = set()
-current_gameview = None
+round_skipped = {}
+game_running = {} # Flag to check if the game is currently running
+players_interacted = {}
+current_gameview = {}
 
 
 #Leaderboard of players
-def get_top_players():
+def get_top_players(guild_id):
     """Returns the top 3 players based on their points, including those with 0 points."""
     global players_interacted  # Ensure we have access to the global players_interacted set
-
+    
+    if guild_id not in players_points:
+        players_points[guild_id] = {}
+    if guild_id not in players_interacted:
+        players_interacted[guild_id] = set()
+    '''
     # Ensure all interacted players are in the leaderboard, even if they have 0 points
-    all_players = set(players_interacted)  # Ensure all interacted players are added
+    all_players = set(players_interacted[guild_id])  # Ensure all interacted players are added
     for player in all_players:
-        if player not in players_points:
-            players_points[player] = 0  # Set score to 0 for players who didn't score any points
-
+        if player not in players_points[guild_id]:
+            players_points[guild_id][player] = 0  # Set score to 0 for players who didn't score any points
+    '''
     # Sort players based on points, in descending order
-    sorted_players = sorted(players_points.items(), key=lambda x: x[1], reverse=True)
+    sorted_players = sorted(players_points[guild_id].items(), key=lambda x: x[1], reverse=True)
 
     # Ensure there are always 3 entries in the leaderboard, even if no players have scored
     while len(sorted_players) < 3:
@@ -51,8 +56,9 @@ def get_top_players():
     return sorted_players[:3]
 
 class GameView(View):
-    def __init__(self, correct_answer, interaction, selected_songs, voice_client):
+    def __init__(self, correct_answer, interaction, selected_songs, voice_client, guild_id):
         super().__init__(timeout=15)  # Set the timeout for 15 seconds
+        self.guild_id = guild_id  # Save the guild ID to track game state
         self.correct_answer = correct_answer
         self.interaction = interaction
         self.selected_songs = selected_songs
@@ -78,8 +84,8 @@ class GameView(View):
             self.add_item(button)
         
         # Track this view as the most recent one
-        global current_game_view
-        current_game_view = self
+        global current_gameview
+        current_gameview[self.guild_id] = self
 
     def create_button_callback(self, song):
         async def callback(interaction: discord.Interaction):
@@ -88,7 +94,7 @@ class GameView(View):
 
     async def handle_option(self, interaction, option):
         global players_interacted
-        if not game_running:  # Check if the game is still running
+        if not game_running.get(self.guild_id, False):  # Check if the game is still running
             await self.send_response(interaction, "The game has stopped. Please wait for the next game.", ephemeral=True)
             return
         
@@ -101,12 +107,19 @@ class GameView(View):
             await interaction.followup.send("You must be in the same voice channel as the bot to play!", ephemeral=True)
             return
         
-        if interaction.user.id in self.players_interacted:
+        if interaction.user.id in players_interacted.get(self.guild_id, set()):
             await self.send_response(interaction, "You already answered!", ephemeral=True)
             return
 
-        self.players_interacted.add(interaction.user.id)
-        players_interacted.add(interaction.user.name)
+        # Initialize the set for players if it's not already initialized for this guild
+        if self.guild_id not in players_interacted:
+            players_interacted[self.guild_id] = set()
+        
+        players_interacted[self.guild_id].add(interaction.user.id)
+        
+        # Add the player to players_points with 0 points if they haven't interacted before
+        if interaction.user.name not in players_points[self.guild_id]:
+            players_points[self.guild_id][interaction.user.name] = 0
         
         # Calculate points
         elapsed_time = time.time() - self.start_time
@@ -115,16 +128,24 @@ class GameView(View):
         # Check if the answer is correct
         correct_song = os.path.basename(self.correct_answer)
         correct_song_name = os.path.splitext(correct_song)[0]
-        total_points = players_points.get(interaction.user.name, 0)
+        total_points = players_points.get(self.guild_id, {}).get(interaction.user.name, 0)
+
         
         if option == self.correct_answer:
-            players_points[interaction.user.name] = total_points + int(points)
+            players_points[self.guild_id][interaction.user.name] = total_points + int(points)
             self.correct_players.append(interaction.user.name)
             await interaction.followup.send(f"Correct! You get {int(points)} points! Your total points are now {total_points + int(points)}.", ephemeral=True)
         else:
             await interaction.followup.send(f"Wrong! The correct answer was {correct_song_name}. Your total points are still {total_points}.", ephemeral=True)
 
-        if len(self.players_interacted) == len(self.voice_channel_members) - 1:
+        # Check if the voice channel has no members (everyone left)
+        if len(self.voice_client.channel.members) == 0:
+            await interaction.followup.send("Everyone left the voice channel. The game has ended.")
+            game_running[self.guild_id] = False  # Set game_running to False to stop the game
+            return  # End the game if everyone leaves
+        
+        # Check if everyone has interacted (or all players have answered)
+        if len(players_interacted.get(self.guild_id, set())) == len(self.voice_channel_members) - 1:
             await self.stop_round()
 
     async def send_response(self, interaction, message, ephemeral=False):
@@ -140,7 +161,7 @@ class GameView(View):
             await self.interaction.channel.send(message)
 
     async def stop_round(self):
-        if not game_running:  # Check if the game is still running before sending messages
+        if not game_running.get(self.guild_id, False):  # Check if the game is still running before sending messages
             return
 
         # Disable all buttons
@@ -158,14 +179,17 @@ class GameView(View):
             await self.send_response(self.interaction, f"_ _ \nThe answer was **{correct_song_name}**! No one got it right. \n \n https://tenor.com/view/sad-anime-gif-21889993")
 
         # Display top 3 leaderboard
-        top_players = get_top_players()
+        top_players = get_top_players(self.guild_id)
         if top_players:
-            leaderboard = "\n".join([f"{idx+1}. {player[0] if player[0] else 'No player'} - {player[1]} points" 
-                                for idx, player in enumerate(top_players)])
+            leaderboard = "\n".join([f"{idx+1}. {player[0] if player[0] else 'No player'} - {player[1]} points" for idx, player in enumerate(top_players)])
             await self.send_response(self.interaction, f"_ _\n\n**Leaderboard:**\n{leaderboard}\n\n")
         else:
             await self.send_response(self.interaction, "No one participated")
 
+        # Reset the interacted players for this guild (this is the key change)
+        if self.guild_id in players_interacted:
+            players_interacted[self.guild_id].clear()
+        
         self.stop()
 
     async def on_timeout(self):
@@ -182,14 +206,16 @@ async def endless(interaction: discord.Interaction):
     """Starts the game if the user is in a VC"""
     global players_points, game_running, players_interacted, round_skipped
     
-    if game_running:  # Check if the game is already running
+    guild_id = interaction.guild.id
+    
+    if game_running.get(guild_id, False):  # Check if the game is already running
         await interaction.response.send_message("A game is already running. Please stop it first using /stop.")
         return
     
-    players_interacted = set()
-    players_points = {}
+    players_interacted[guild_id] = set()
+    players_points[guild_id] = {}
     
-    game_running = True  # Set the flag to True to start
+    game_running[guild_id] = True  # Set the flag to True to start
     if interaction.user.voice:
         channel = interaction.user.voice.channel
         voice_client = await channel.connect()
@@ -199,10 +225,10 @@ async def endless(interaction: discord.Interaction):
 
         # Start an infinite loop for the game
         round_counter = 0
-        while game_running and voice_client.is_connected():
+        while game_running.get(guild_id, False) and voice_client.is_connected():
             # Check if the round is skipped
-            if round_skipped:
-                round_skipped = False  # Reset the skip flag
+            if round_skipped.get(guild_id, False):
+                round_skipped[guild_id] = False  # Reset the skip flag
                 await interaction.channel.send("The round has been skipped! Moving to the next round...\n")
                 continue  # Skip to the next round
             
@@ -214,7 +240,7 @@ async def endless(interaction: discord.Interaction):
             correct_answer = correct_song
 
             # Create a view with buttons for the game
-            view = GameView(correct_answer, interaction, selected_songs, voice_client)
+            view = GameView(correct_answer, interaction, selected_songs, voice_client, guild_id)
 
             # Send the question and options (follow-up response)
             await interaction.channel.send(
@@ -235,20 +261,26 @@ async def endless(interaction: discord.Interaction):
             voice_client.stop()
     else:
         await interaction.response.send_message("You need to be in a voice channel first!")
-        game_running = False
+        game_running[guild_id] = False
 
 @bot.tree.command(name="game", description="Start a game of Dokkan OSTs")
 async def game(interaction: discord.Interaction, rounds: int = 30):  # Default to 30 rounds
     global game_running, players_interacted
     
+    guild_id = interaction.guild.id
+    
+    if rounds < 1:
+        await interaction.response.send_message(f"You cant play {rounds} rounds...")
+        return
+    
     # Check if the game is already running
-    if game_running:
+    if game_running.get(guild_id, False):
         await interaction.response.send_message("A game is already running. Please stop it first using /stop.")
         return
 
-    players_interacted = set()
+    players_interacted[guild_id] = set()
     
-    game_running = True  # Set the flag to True to indicate the game is running
+    game_running[guild_id] = True  # Set the flag to True to indicate the game is running
 
     # Check if the user is in a voice channel
     if interaction.user.voice:
@@ -262,14 +294,15 @@ async def game(interaction: discord.Interaction, rounds: int = 30):  # Default t
         await start_game(interaction, voice_client, rounds)
     else:
         await interaction.response.send_message("You need to be in a voice channel first!")
-        game_running = False
+        game_running[guild_id] = False
         
 async def start_game(interaction, voice_client, rounds):
     """Starts the game for the specified number of rounds"""
     global game_running, players_points
-    players_points = {}
+    guild_id = interaction.guild.id
+    players_points[guild_id] = {}
     round_counter = 0
-    while round_counter < rounds and game_running:
+    while round_counter < rounds and game_running.get(guild_id, False):
         # Randomly choose 4 songs from the song list
         selected_songs = random.sample(songs, 4)
 
@@ -277,10 +310,10 @@ async def start_game(interaction, voice_client, rounds):
         correct_song = random.choice(selected_songs)
 
         # Create a view with buttons for the game
-        view = GameView(correct_song, interaction, selected_songs, voice_client)
+        view = GameView(correct_song, interaction, selected_songs, voice_client, guild_id)
 
         # Check if the game is still running before sending the question message
-        if not game_running:
+        if not game_running.get(guild_id, False):
             break
         
         # Send the question and options (initial message)
@@ -301,8 +334,8 @@ async def start_game(interaction, voice_client, rounds):
             voice_client.stop()
 
     # Ensure no game-related messages are sent if the game was stopped
-    if game_running:
-        game_running = False
+    if game_running.get(guild_id, False):
+        game_running[guild_id] = False
             
         # Disconnect from the voice channel
         voice_client.stop()
@@ -311,15 +344,23 @@ async def start_game(interaction, voice_client, rounds):
         # Send game over message
         await interaction.channel.send(f"_ _ \nGame Over! {rounds} rounds completed.\n")
         
-        # Announce the winner
-        if players_points:
-            winner = max(players_points, key=players_points.get)
-            await interaction.channel.send(f"_ _\n\nThe winner is {winner} with {players_points[winner]} points!\n\n")
+        # Display the top player (only the highest points player)
+        top_players = get_top_players(guild_id)
+
+        if top_players:
+            # Get the player with the highest points (first player in the sorted list)
+            winner_name, winner_points = top_players[0]
+            
+            if winner_name and winner_points > 0:
+                await interaction.followup.send(f"_ _\n\n**The winner is {winner_name} with {winner_points} points!**\n\n _ _")
+            else:
+                await interaction.followup.send("_ _\n\nNo one won. All players scored 0 points.\n\n _ _")
         else:
-            await interaction.channel.send("_ _\nNo one scored any points.\n")
+            await interaction.followup.send("_ _\nNo one scored any points.\n _ _")
+
             
         # Display top 3 leaderboard
-        top_players = get_top_players()
+        top_players = get_top_players(guild_id)
 
         # Ensure there are always 3 places in the leaderboard, even if no players are there
         if len(top_players) < 3:
@@ -333,22 +374,28 @@ async def start_game(interaction, voice_client, rounds):
         await interaction.channel.send(f"_ _\n\n**FINAL Leaderboard:**\n{leaderboard}\n\n")
         
     # Reset the game_running flag after the game ends
-    game_running = False
+    game_running[guild_id] = False
 
-
-
+'''
 @bot.command()
 async def skip(ctx):
     """Skips the current round and moves to the next one"""
     global round_skipped  # Access the global variable to flag the round as skipped
     round_skipped = True  # Set the flag to indicate the round is skipped
     await ctx.send("The round is being skipped. Moving to the next round...")
+'''
 
 @bot.tree.command(name="stop", description="Ends the game")
 async def stop(interaction: discord.Interaction):
     """Ends the game and announces the winner"""
-    global game_running, current_game_view
+    global game_running, current_gameview
     
+    guild_id = interaction.guild.id
+    
+    # Check if the game is running for this guild
+    if not game_running.get(guild_id, False):
+        await interaction.response.send_message("No game is running in this server.")
+        return
 
     # Stop and disconnect from the voice channel
     voice_client = discord.utils.get(bot.voice_clients, guild=interaction.guild)
@@ -356,26 +403,27 @@ async def stop(interaction: discord.Interaction):
         await voice_client.disconnect()
 
     # If the game is still running, simulate the timeout behavior
-    if current_game_view:
-        await current_game_view.on_timeout()
+    if current_gameview.get(guild_id, None):
+        await current_gameview[guild_id].on_timeout()
     
-    game_running = False
+    game_running[guild_id] = False
     
     # Print game over
     await interaction.channel.send(f"_ _\n\n\nTHE GAME HAS ENDED!!!\n\n\n")
     
-    # Announce the winner
-    if players_points:
-        winner = max(players_points, key=players_points.get)
-        if players_points[winner] == 0:  # Check if the highest points are 0
-            await interaction.response.send_message("_ _\n\nNo one won. All players scored 0 points. \n\n")
+    # Display the top player (only the highest points player)
+    top_players = get_top_players(guild_id)
+
+    if top_players:
+        # Get the player with the highest points (first player in the sorted list)
+        winner_name, winner_points = top_players[0]
+        
+        if winner_name and winner_points > 0:
+            await interaction.response.send_message(f"_ _\n\n**The winner is {winner_name} with {winner_points} points!**\n\n _ _")
         else:
-            await interaction.response.send_message(f"_ _\n\nThe game is over! {winner} wins with {players_points[winner]} points! \n\n")
+            await interaction.response.send_message("_ _\n\nNo one won. All players scored 0 points.\n\n _ _")
     else:
         await interaction.response.send_message("_ _\nNo one scored any points.\n")
-        
-    # Display top 3 leaderboard
-    top_players = get_top_players()
 
     # Ensure there are always 3 places in the leaderboard, even if no players are there
     if len(top_players) < 3:
