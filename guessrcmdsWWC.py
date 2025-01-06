@@ -30,6 +30,7 @@ game_running = {}
 players_interacted = {}
 current_gameview = {}
 round_skipped = {}
+currently_playing = {}
 looping_songs = {}
 
 
@@ -441,12 +442,15 @@ async def start_game(interaction, voice_client, rounds):
 
 @bot.tree.command(name="skipround", description="Skip the current round")
 async def skipround(interaction: discord.Interaction):
+    global game_running, currently_playing
     """Skips the current round and moves to the next one"""
     guild_id = interaction.guild.id
-    if current_gameview.get(guild_id, None):
+    if game_running.get(guild_id, False):
         await interaction.response.send_message("Skipping", ephemeral = True)
         await interaction.channel.send(f"_ _\nRound has been skipped\n_ _")
         await current_gameview[guild_id].stop_round()
+    elif currently_playing.get(guild_id, False):
+        await interaction.response.send_message("Not playing a game. Stop the bot first using /dc.")
     else:
         await interaction.response.send_message("No game is running in this server.")
     
@@ -509,7 +513,7 @@ async def stop(interaction: discord.Interaction):
 @bot.tree.command(name="play", description="Play a song in a voice channel")
 @app_commands.describe(song="Search for a song to play")
 async def play(interaction: discord.Interaction, song: str):
-    global game_running
+    global game_running, currently_playing, looping_songs
     
     # Check if a game is already running
     if game_running.get(interaction.guild.id, False):
@@ -541,6 +545,9 @@ async def play(interaction: discord.Interaction, song: str):
 
     # Join the voice channel
     vc = await voice_channel.connect()
+    
+    # Track the currently playing song
+    currently_playing[interaction.guild.id] = os.path.splitext(os.path.basename(song_path))[0]
 
     # Play the song using FFmpeg
     vc.play(discord.FFmpegPCMAudio(song_path), after=lambda e: print('done', e))
@@ -548,12 +555,23 @@ async def play(interaction: discord.Interaction, song: str):
     # Send a response that the song is playing
     await interaction.response.send_message(f"Now playing: {os.path.splitext(os.path.basename(song_path))[0]}")
 
-    # Disconnect after the song finishes playing
+    # Wait until the song finishes playing
     while vc.is_playing():
-        await asyncio.sleep(0.1)  # Wait for the song to finish
+        await asyncio.sleep(0.1)
+        
+    # If loop is enabled, start looping the song
+    while looping_songs.get(interaction.guild.id, False):
+        # Replay the song
+        vc.play(discord.FFmpegPCMAudio(song_path), after=lambda e: print('done', e))
+        await interaction.followup.send(f"Looping: {os.path.splitext(os.path.basename(song_path))[0]}")
+        
+        # Wait until the song finishes playing
+        while vc.is_playing():
+            await asyncio.sleep(0.1)
 
     # After the song finishes, disconnect from the voice channel
     await vc.disconnect()
+    currently_playing[interaction.guild.id] = False
 
 def clean_text(text):
     # Remove special characters (like &, [, ], etc.) and convert to lowercase
@@ -574,15 +592,50 @@ async def song_autocomplete(interaction: discord.Interaction, song: str):
             matching_songs.append(app_commands.Choice(name=os.path.splitext(os.path.basename(song_name))[0], value=os.path.splitext(os.path.basename(song_name))[0]))
     return matching_songs[:25]
 
-
+# Command to loop or unloop the currently playing song
+@bot.tree.command(name="loop", description="Loop or unloop the currently playing song.")
+async def loop(interaction: discord.Interaction):
+    global currently_playing, looping_songs, radio_playing
+    
+    # Get the currently playing song for the guild
+    song_name = currently_playing.get(interaction.guild.id)
+    
+    if radio_playing.get(interaction.guild.id, False):
+        await interaction.response.send_message("Play this song using /play to loop.")
+        return
+    
+    if not song_name:
+        await interaction.response.send_message("Play a song using /play to loop.")
+        return
+    
+    # Check if the song is already looping
+    if looping_songs.get(interaction.guild.id, False):
+        # Song is already looping, unloop it
+        looping_songs[interaction.guild.id] = False
+        await interaction.response.send_message(f"Stopped looping {song_name}.")
+    else:
+        # Song is not looping, set it to loop
+        looping_songs[interaction.guild.id] = True
+        await interaction.response.send_message(f"Started looping {song_name}.")
 
 @bot.tree.command(name="dc", description="Disconnect the bot from playing OSTs")
 async def dc(interaction: discord.Interaction):
-    global game_running
+    global game_running, looping_songs
     voice_client = interaction.guild.voice_client
+    
     if voice_client and not game_running.get(interaction.guild.id, False):
-        await voice_client.disconnect()
-        await interaction.response.send_message("Bot has disconnected.")
+        if looping_songs.get(interaction.guild.id, False):
+            # Song is already looping, unloop it
+            looping_songs[interaction.guild.id] = False
+            await interaction.response.send_message("Bot has disconnected.")
+        else:
+            await interaction.response.send_message("Bot has disconnected.")
+            
+        if radio_playing.get(interaction.guild.id, False):
+            radio_playing[interaction.guild.id] = False
+            
+        await voice_client.disconnect(force = True)
+        currently_playing[interaction.guild.id] = False
     elif game_running.get(interaction.guild.id, False):
         await interaction.response.send_message("The game is running. Stop the game first using /stop.")
     else:
@@ -647,9 +700,9 @@ async def radio(interaction: discord.Interaction):
     await play_next_song()
 
 # Skip command to stop the current song and play the next one
-@bot.tree.command(name="skip", description="Skip the current song and play the next one.")
+@bot.tree.command(name="skip", description="Skip the current song in the radio and play the next one.")
 async def skip(interaction: discord.Interaction):
-    global radio_playing
+    global radio_playing, currently_playing
 
     # Check if the radio is playing
     if radio_playing.get(interaction.guild.id, False):
@@ -659,7 +712,9 @@ async def skip(interaction: discord.Interaction):
             voice_client.stop()
             await interaction.response.send_message("Song skipped! Playing the next random song.")
         else:
-            await interaction.response.send_message("No song is currently playing.")
+            await interaction.response.send_message("Not playing a song right now.")
+    elif currently_playing.get(interaction.guild.id, False):
+        await interaction.response.send_message("The bot is currently playing a regular song. Stop the song first using /dc.")
     else:
         await interaction.response.send_message("The radio is not currently playing, skip game rounds with /skipround.")
 
