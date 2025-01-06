@@ -1,12 +1,13 @@
 import discord
 from discord.ext import commands
 import random
+from discord.ext.commands import has_permissions
 import os
-from discord import FFmpegPCMAudio
+from discord import FFmpegPCMAudio, app_commands
 from dotenv import load_dotenv
 from discord.ui import Button, View
 import asyncio
-import time
+import time, re
 
 # Load the environment variables from the .env file
 load_dotenv()
@@ -22,12 +23,14 @@ directory = r'C:\Users\Megas\Documents\GitHub\GuessDokkanOst\songs'
 # Get a list of all .mp3 files in the directory
 songs = [os.path.join(directory, f) for f in os.listdir(directory) if f.endswith('.mp3')]
 
-# A dictionary to hold players' points
+# Global Dictionaries
 players_points = {}
-round_skipped = {}
-game_running = {} # Flag to check if the game is currently running
+radio_playing = {}
+game_running = {}
 players_interacted = {}
 current_gameview = {}
+round_skipped = {}
+looping_songs = {}
 
 
 #Leaderboard of players
@@ -57,7 +60,7 @@ def get_top_players(guild_id):
 
 class GameView(View):
     def __init__(self, correct_answer, interaction, selected_songs, voice_client, guild_id):
-        super().__init__(timeout=15)  # Set the timeout for 15 seconds
+        super().__init__(timeout=10)  # Set the timeout for 10 seconds
         self.guild_id = guild_id  # Save the guild ID to track game state
         self.correct_answer = correct_answer
         self.interaction = interaction
@@ -66,7 +69,6 @@ class GameView(View):
         self.players_interacted = set()  # Track which players have interacted
         self.correct_players = []  # Initialize the correct_players list to track correct answers
         self.start_time = time.time()  # Record the start time of the round
-        self.voice_channel_members = self.interaction.user.voice.channel.members  # Get members in the voice channel
 
         self.response_sent = False  # Flag to track if the initial response has been sent
         
@@ -139,14 +141,11 @@ class GameView(View):
             await interaction.followup.send(f"Wrong! The correct answer was {correct_song_name}. Your total points are still {total_points}.", ephemeral=True)
 
         # Check if the voice channel has no members (everyone left)
-        if len(self.voice_client.channel.members) == 0:
+        if len([member for member in self.voice_client.channel.members if not member.bot]) == 0:
             await interaction.followup.send("Everyone left the voice channel. The game has ended.")
             game_running[self.guild_id] = False  # Set game_running to False to stop the game
+            await current_gameview[self.guild_id].stop_round()
             return  # End the game if everyone leaves
-        
-        # Check if everyone has interacted (or all players have answered)
-        if len(players_interacted.get(self.guild_id, set())) == len(self.voice_channel_members) - 1:
-            await self.stop_round()
 
     async def send_response(self, interaction, message, ephemeral=False):
         # If the initial response hasn't been sent yet, use response.send_message()
@@ -212,6 +211,12 @@ async def endless(interaction: discord.Interaction):
         await interaction.response.send_message("A game is already running. Please stop it first using /stop.")
         return
     
+    # Check if the bot is already in a voice channel
+    voice_client = interaction.guild.voice_client
+    if voice_client:
+        await interaction.response.send_message("Bot is already connected to a voice channel.")
+        return
+    
     players_interacted[guild_id] = set()
     players_points[guild_id] = {}
     
@@ -232,13 +237,23 @@ async def endless(interaction: discord.Interaction):
                 await interaction.channel.send("The round has been skipped! Moving to the next round...\n")
                 continue  # Skip to the next round
             
+            # Check if the voice channel has no members (everyone left)
+            if len([member for member in voice_client.channel.members if not member.bot]) == 0:
+                await interaction.followup.send("Everyone left the voice channel. The game has ended.")
+                game_running[guild_id] = False  # Set game_running to False to stop the game
+                if current_gameview.get(guild_id, None):
+                    await current_gameview[guild_id].stop_round()
+                voice_client.stop()
+                await voice_client.disconnect()
+                return  # End the game if everyone leaves
+            
             # Randomly choose 4 songs from the song list
             selected_songs = random.sample(songs, 4)
 
             # Select the correct answer (the song being played)
             correct_song = random.choice(selected_songs)
             correct_answer = correct_song
-
+            
             # Create a view with buttons for the game
             view = GameView(correct_answer, interaction, selected_songs, voice_client, guild_id)
 
@@ -255,8 +270,23 @@ async def endless(interaction: discord.Interaction):
             # Wait for the game to stop (after the song finishes or all players have interacted)
             await view.wait()
             
-            # Add a delay before starting the next round
-            await asyncio.sleep(1)
+            delay = 3  # Delay in seconds
+
+            # Track time elapsed
+            start_time = asyncio.get_event_loop().time()  # Track when the wait starts
+            while True:
+                # Check if the game has stopped
+                if not game_running.get(guild_id, False):  # If game_running is False, stop the loop
+                    print("Game has been stopped. Exiting round.")
+                    break
+                
+                # Check if we've exceeded the desired delay (3 seconds)
+                elapsed_time = asyncio.get_event_loop().time() - start_time
+                if elapsed_time >= delay:  # If 3 seconds have passed, stop waiting
+                    break
+                
+                # Sleep for a short period to prevent blocking the event loop and check again
+                await asyncio.sleep(0.1)  # Sleep for 100ms and recheck the game state
             round_counter += 1
             voice_client.stop()
     else:
@@ -276,6 +306,12 @@ async def game(interaction: discord.Interaction, rounds: int = 30):  # Default t
     # Check if the game is already running
     if game_running.get(guild_id, False):
         await interaction.response.send_message("A game is already running. Please stop it first using /stop.")
+        return
+    
+    # Check if the bot is already in a voice channel
+    voice_client = interaction.guild.voice_client
+    if voice_client:
+        await interaction.response.send_message("Bot is already connected to a voice channel.")
         return
 
     players_interacted[guild_id] = set()
@@ -303,6 +339,20 @@ async def start_game(interaction, voice_client, rounds):
     players_points[guild_id] = {}
     round_counter = 0
     while round_counter < rounds and game_running.get(guild_id, False):
+        # Check if the game is still running before sending the question message
+        if not game_running.get(guild_id, False):
+            break
+        
+        # Check if the voice channel has no members (everyone left)
+        if len([member for member in voice_client.channel.members if not member.bot]) == 0:
+            await interaction.followup.send("Everyone left the voice channel. The game has ended.")
+            game_running[guild_id] = False  # Set game_running to False to stop the game
+            if current_gameview.get(guild_id, None):
+                await current_gameview[guild_id].stop_round()
+            voice_client.stop()
+            await voice_client.disconnect()
+            return  # End the game if everyone leaves
+        
         # Randomly choose 4 songs from the song list
         selected_songs = random.sample(songs, 4)
 
@@ -311,10 +361,6 @@ async def start_game(interaction, voice_client, rounds):
 
         # Create a view with buttons for the game
         view = GameView(correct_song, interaction, selected_songs, voice_client, guild_id)
-
-        # Check if the game is still running before sending the question message
-        if not game_running.get(guild_id, False):
-            break
         
         # Send the question and options (initial message)
         await interaction.channel.send(f"_ _\n\n```Round {round_counter + 1}: What OST is this? Choose your answer below.```", view=view)
@@ -330,7 +376,23 @@ async def start_game(interaction, voice_client, rounds):
 
         # Add a delay before starting the next round
         if round_counter < rounds:
-            await asyncio.sleep(1)
+            delay = 3  # Delay in seconds
+
+            # Track time elapsed
+            start_time = asyncio.get_event_loop().time()  # Track when the wait starts
+            while True:
+                # Check if the game has stopped
+                if not game_running.get(guild_id, False):  # If game_running is False, stop the loop
+                    print("Game has been stopped. Exiting round.")
+                    break
+                
+                # Check if we've exceeded the desired delay (3 seconds)
+                elapsed_time = asyncio.get_event_loop().time() - start_time
+                if elapsed_time >= delay:  # If 3 seconds have passed, stop waiting
+                    break
+                
+                # Sleep for a short period to prevent blocking the event loop and check again
+                await asyncio.sleep(0.1)  # Sleep for 100ms and recheck the game state
             voice_client.stop()
 
     # Ensure no game-related messages are sent if the game was stopped
@@ -376,14 +438,18 @@ async def start_game(interaction, voice_client, rounds):
     # Reset the game_running flag after the game ends
     game_running[guild_id] = False
 
-'''
-@bot.command()
-async def skip(ctx):
+
+@bot.tree.command(name="skipround", description="Skip the current round")
+async def skipround(interaction: discord.Interaction):
     """Skips the current round and moves to the next one"""
-    global round_skipped  # Access the global variable to flag the round as skipped
-    round_skipped = True  # Set the flag to indicate the round is skipped
-    await ctx.send("The round is being skipped. Moving to the next round...")
-'''
+    guild_id = interaction.guild.id
+    if current_gameview.get(guild_id, None):
+        await interaction.response.send_message("Skipping", ephemeral = True)
+        await interaction.channel.send(f"_ _\nRound has been skipped\n_ _")
+        await current_gameview[guild_id].stop_round()
+    else:
+        await interaction.response.send_message("No game is running in this server.")
+    
 
 @bot.tree.command(name="stop", description="Ends the game")
 async def stop(interaction: discord.Interaction):
@@ -400,16 +466,17 @@ async def stop(interaction: discord.Interaction):
     # Stop and disconnect from the voice channel
     voice_client = discord.utils.get(bot.voice_clients, guild=interaction.guild)
     if voice_client:
+        voice_client.stop()
         await voice_client.disconnect()
 
-    # If the game is still running, simulate the timeout behavior
+    # If the game is still running, simulate the stop behavior
     if current_gameview.get(guild_id, None):
-        await current_gameview[guild_id].on_timeout()
+        await current_gameview[guild_id].stop_round()
     
     game_running[guild_id] = False
     
     # Print game over
-    await interaction.channel.send(f"_ _\n\n\nTHE GAME HAS ENDED!!!\n\n\n")
+    await interaction.channel.send(f"_ _\n\n\nTHE GAME HAS ENDED!!!\n\n\n_ _")
     
     # Display the top player (only the highest points player)
     top_players = get_top_players(guild_id)
@@ -436,6 +503,166 @@ async def stop(interaction: discord.Interaction):
 
     # Use channel for additional responses after the first one
     await interaction.channel.send(f"_ _\n\n**FINAL Leaderboard:**\n{leaderboard}\n\n")
+
+
+# Play command with autocomplete for song names
+@bot.tree.command(name="play", description="Play a song in a voice channel")
+@app_commands.describe(song="Search for a song to play")
+async def play(interaction: discord.Interaction, song: str):
+    global game_running
+    
+    # Check if a game is already running
+    if game_running.get(interaction.guild.id, False):
+        await interaction.response.send_message("A game is already running. Stop the game first using /stop.")
+        return
+    
+    # Check if the bot is already in a voice channel
+    voice_client = interaction.guild.voice_client
+    if voice_client:
+        await interaction.response.send_message("Bot is already connected to a voice channel.")
+        return
+    
+    # Find the song path from the list of songs
+    song_path = None
+    for song_file in songs:
+        if os.path.splitext(os.path.basename(song_file))[0].lower() == song.lower():
+            song_path = song_file
+            break
+    
+    if song_path is None:
+        await interaction.response.send_message("Song not found.")
+        return
+
+    # Get the voice channel the user is in
+    voice_channel = interaction.user.voice.channel if interaction.user.voice else None
+    if not voice_channel:
+        await interaction.response.send_message("You need to be in a voice channel to play a song.")
+        return
+
+    # Join the voice channel
+    vc = await voice_channel.connect()
+
+    # Play the song using FFmpeg
+    vc.play(discord.FFmpegPCMAudio(song_path), after=lambda e: print('done', e))
+    
+    # Send a response that the song is playing
+    await interaction.response.send_message(f"Now playing: {os.path.splitext(os.path.basename(song_path))[0]}")
+
+    # Disconnect after the song finishes playing
+    while vc.is_playing():
+        await asyncio.sleep(0.1)  # Wait for the song to finish
+
+    # After the song finishes, disconnect from the voice channel
+    await vc.disconnect()
+
+def clean_text(text):
+    # Remove special characters (like &, [, ], etc.) and convert to lowercase
+    return re.sub(r'[^a-zA-Z0-9\s]', '', text).lower()
+
+# Autocomplete function for song search within the `/play` command
+@play.autocomplete('song')
+async def song_autocomplete(interaction: discord.Interaction, song: str):
+    # Clean the user input
+    cleaned_song_input = clean_text(song)
+    
+    matching_songs = []
+    for song_name in songs:
+        cleaned_song_name = clean_text(os.path.splitext(os.path.basename(song_name))[0])
+
+        # Check if all words in the cleaned input are present in the cleaned song name
+        if all(word in cleaned_song_name for word in cleaned_song_input.split()):
+            matching_songs.append(app_commands.Choice(name=os.path.splitext(os.path.basename(song_name))[0], value=os.path.splitext(os.path.basename(song_name))[0]))
+    return matching_songs[:25]
+
+
+
+@bot.tree.command(name="dc", description="Disconnect the bot from playing OSTs")
+async def dc(interaction: discord.Interaction):
+    global game_running
+    voice_client = interaction.guild.voice_client
+    if voice_client and not game_running.get(interaction.guild.id, False):
+        await voice_client.disconnect()
+        await interaction.response.send_message("Bot has disconnected.")
+    elif game_running.get(interaction.guild.id, False):
+        await interaction.response.send_message("The game is running. Stop the game first using /stop.")
+    else:
+        await interaction.response.send_message("Bot is not connected to any voice channel.")
+
+# Radio command to play random songs infinitely
+@bot.tree.command(name="radio", description="Play random songs in a loop")
+async def radio(interaction: discord.Interaction):
+    global game_running, radio_playing
+
+    # Check if a game is already running
+    if game_running.get(interaction.guild.id, False):
+        await interaction.response.send_message("A game is already running. Stop the game first using /stop.")
+        return
+
+    # Check if the bot is already in a voice channel
+    voice_client = interaction.guild.voice_client
+    if voice_client:
+        await interaction.response.send_message("Bot is already connected to a voice channel.")
+        return
+
+    # Get the voice channel the user is in
+    voice_channel = interaction.user.voice.channel if interaction.user.voice else None
+    if not voice_channel:
+        await interaction.response.send_message("You need to be in a voice channel to start the radio.")
+        return
+
+    # Join the voice channel
+    vc = await voice_channel.connect()
+    
+    # Mark radio as playing
+    radio_playing[interaction.guild.id] = True
+    
+    # Initial response to start the radio
+    await interaction.response.send_message("Starting the radio...")
+
+    async def play_next_song():
+        while radio_playing.get(interaction.guild.id, False):  # Continue playing until radio is stopped
+            # Select a random song from the list
+            song_file = random.choice(songs)
+            song_name = os.path.splitext(os.path.basename(song_file))[0]
+            print(f"Now playing: {song_name}")
+            
+            # Play the song using FFmpeg
+            vc.play(discord.FFmpegPCMAudio(song_file))
+
+            # Send a follow-up message to notify about the song being played
+            await interaction.followup.send(f"Now playing: {song_name}")
+
+            # Wait until the song finishes playing
+            while vc.is_playing():
+                await asyncio.sleep(0.1)  # Check every second if the song is still playing
+
+            # Check if a game has started or if the radio should stop
+            if game_running.get(interaction.guild.id, False):
+                break
+
+        # Disconnect after the radio is stopped or the game starts
+        await vc.disconnect()
+
+    # Start the song loop
+    await play_next_song()
+
+# Skip command to stop the current song and play the next one
+@bot.tree.command(name="skip", description="Skip the current song and play the next one.")
+async def skip(interaction: discord.Interaction):
+    global radio_playing
+
+    # Check if the radio is playing
+    if radio_playing.get(interaction.guild.id, False):
+        voice_client = interaction.guild.voice_client
+        if voice_client and voice_client.is_playing():
+            # Stop the current song immediately
+            voice_client.stop()
+            await interaction.response.send_message("Song skipped! Playing the next random song.")
+        else:
+            await interaction.response.send_message("No song is currently playing.")
+    else:
+        await interaction.response.send_message("The radio is not currently playing, skip game rounds with /skipround.")
+
 
 
 bot.run(BOT_TOKEN)  # Run the bot with your actual bot token

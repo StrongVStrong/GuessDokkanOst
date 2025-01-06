@@ -384,4 +384,4 @@ async def stop(ctx):
 
     await ctx.send(f"**Leaderboard:**\n{leaderboard}\n\n")
 
-bot.run(BOT_TOKEN)  # Run the bot with your actual bot token
+bot.run(BOT_TOKEN)  # Use your own bot token to run it yourself
