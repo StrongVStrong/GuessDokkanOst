@@ -5,7 +5,7 @@ directory = r'C:\Users\Megas\Documents\GitHub\GuessDokkanOst\songs'
 
 # Loop through each file in the directory
 for filename in os.listdir(directory):
-    # Check if it's a file (to avoid directories)
+    # Check if it's a file
     if os.path.isfile(os.path.join(directory, filename)):
         # Start with the original filename
         new_filename = filename

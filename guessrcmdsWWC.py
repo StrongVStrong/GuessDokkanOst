@@ -61,23 +61,21 @@ def get_top_players(guild_id):
 
 class GameView(View):
     def __init__(self, correct_answer, interaction, selected_songs, voice_client, guild_id):
-        super().__init__(timeout=10)  # Set the timeout for 10 seconds
-        self.guild_id = guild_id  # Save the guild ID to track game state
+        super().__init__(timeout=10) 
+        self.guild_id = guild_id 
         self.correct_answer = correct_answer
         self.interaction = interaction
         self.selected_songs = selected_songs
         self.voice_client = voice_client
-        self.players_interacted = set()  # Track which players have interacted
-        self.correct_players = []  # Initialize the correct_players list to track correct answers
+        self.players_interacted = set()
+        self.correct_players = []
         self.start_time = time.time()  # Record the start time of the round
 
-        self.response_sent = False  # Flag to track if the initial response has been sent
+        self.response_sent = False
         
-        # List of emojis to randomly assign
         emojis = ['🔥', '🎵', '🎤', '💥', '🌟', '⚡', '💣']
-        random.shuffle(emojis)  # Shuffle the emojis to prevent repetition
+        random.shuffle(emojis)  
         
-        # Create dynamic buttons based on selected songs
         for idx, song in enumerate(self.selected_songs):
             songbase = os.path.basename(song)
             song_name = os.path.splitext(songbase)[0]
@@ -86,7 +84,6 @@ class GameView(View):
             button.callback = self.create_button_callback(song)
             self.add_item(button)
         
-        # Track this view as the most recent one
         global current_gameview
         current_gameview[self.guild_id] = self
 
@@ -199,6 +196,11 @@ class GameView(View):
 @bot.event
 async def on_ready():
     await bot.tree.sync()
+    activity = discord.Activity(
+        type=discord.ActivityType.playing,
+        name="Guess the OST | /help"
+    )
+    await bot.change_presence(activity=activity)
     print(f'Logged in as {bot.user}')
 
 @bot.tree.command(name="endless", description="Endless barrage of Dokkan OSTs, stop with /stop")
@@ -295,6 +297,7 @@ async def endless(interaction: discord.Interaction):
         game_running[guild_id] = False
 
 @bot.tree.command(name="game", description="Start a game of Dokkan OSTs")
+@app_commands.describe(rounds="Specify the number of rounds to play")
 async def game(interaction: discord.Interaction, rounds: int = 30):  # Default to 30 rounds
     global game_running, players_interacted
     
@@ -457,7 +460,6 @@ async def skipround(interaction: discord.Interaction):
 
 @bot.tree.command(name="stop", description="Ends the game")
 async def stop(interaction: discord.Interaction):
-    """Ends the game and announces the winner"""
     global game_running, current_gameview
     
     guild_id = interaction.guild.id
@@ -718,6 +720,19 @@ async def skip(interaction: discord.Interaction):
     else:
         await interaction.response.send_message("The radio is not currently playing, skip game rounds with /skipround.")
 
-
-
-bot.run(BOT_TOKEN)  # Run the bot with your actual bot token
+@bot.tree.command(name="help", description="List available commands")
+async def help_command(interaction: discord.Interaction):
+    embed = discord.Embed(title="Available Commands", description="Here are the commands you can use:", color=0x00ff00)
+    embed.add_field(name="/game", value="Start a game of Guess the Dokkan OST", inline=False)
+    embed.add_field(name="/endless", value="Endless barrage of Dokkan OSTs, stop with /stop", inline=False)
+    embed.add_field(name="/play", value="Play a song of choice in a voice channel", inline=False)
+    embed.add_field(name="/loop", value="Loop the current song from /play", inline=False)
+    embed.add_field(name="/radio", value="Play random songs in a loop", inline=False)
+    embed.add_field(name="/skipround", value="Skip the current game round", inline=False)
+    embed.add_field(name="/skip", value="Skip the radio OST", inline=False)
+    embed.add_field(name="/stop", value="Stop the current game", inline=False)
+    embed.add_field(name="/dc", value="Disconnect the bot from playing OSTs normally", inline=False)
+    
+    await interaction.response.send_message(embed=embed)
+    
+bot.run(BOT_TOKEN)
