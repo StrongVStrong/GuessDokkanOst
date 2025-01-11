@@ -262,7 +262,7 @@ async def endless(interaction: discord.Interaction):
 
             # Send the question and options (follow-up response)
             await interaction.channel.send(
-                f"_ _\n\n```Round {round_counter + 1}: What OST is this? Choose your answer below.```"
+                f"```Round {round_counter + 1}: What OST is this? Choose your answer below.```"
                 "\n\n", 
                 view=view
                 )
@@ -367,7 +367,7 @@ async def start_game(interaction, voice_client, rounds):
         view = GameView(correct_song, interaction, selected_songs, voice_client, guild_id)
         
         # Send the question and options (initial message)
-        await interaction.channel.send(f"_ _\n\n```Round {round_counter + 1}: What OST is this? Choose your answer below.```", view=view)
+        await interaction.channel.send(f"```Round {round_counter + 1}: What OST is this? Choose your answer below.```", view=view)
 
         # Play the correct song
         voice_client.play(FFmpegPCMAudio(correct_song))
@@ -408,7 +408,7 @@ async def start_game(interaction, voice_client, rounds):
         await voice_client.disconnect()
         
         # Send game over message
-        await interaction.channel.send(f"_ _ \nGame Over! {rounds} rounds completed.\n")
+        await interaction.channel.send(f"Game Over! {rounds} rounds completed.\n")
         
         # Display the top player (only the highest points player)
         top_players = get_top_players(guild_id)
@@ -418,9 +418,9 @@ async def start_game(interaction, voice_client, rounds):
             winner_name, winner_points = top_players[0]
             
             if winner_name and winner_points > 0:
-                await interaction.followup.send(f"_ _\n\n**The winner is {winner_name} with {winner_points} points!**\n\n _ _")
+                await interaction.followup.send(f"_ _\n**The winner is {winner_name} with {winner_points} points!**\n _ _")
             else:
-                await interaction.followup.send("_ _\n\nNo one won. All players scored 0 points.\n\n _ _")
+                await interaction.followup.send("_ _\nNo one won. All players scored 0 points.\n _ _")
         else:
             await interaction.followup.send("_ _\nNo one scored any points.\n _ _")
 
@@ -437,7 +437,7 @@ async def start_game(interaction, voice_client, rounds):
         # Create the leaderboard string
         leaderboard = "\n".join([f"{idx+1}. {player[0] if player[0] else 'No player'} - {player[1]} points" for idx, player in enumerate(top_players)])
 
-        await interaction.channel.send(f"_ _\n\n**FINAL Leaderboard:**\n{leaderboard}\n\n")
+        await interaction.channel.send(f"**FINAL Leaderboard:**\n{leaderboard}\n\n")
         
     # Reset the game_running flag after the game ends
     game_running[guild_id] = False
@@ -492,9 +492,9 @@ async def stop(interaction: discord.Interaction):
         winner_name, winner_points = top_players[0]
         
         if winner_name and winner_points > 0:
-            await interaction.response.send_message(f"_ _\n\n**The winner is {winner_name} with {winner_points} points!**\n\n _ _")
+            await interaction.response.send_message(f"_ _\n**The winner is {winner_name} with {winner_points} points!**\n _ _")
         else:
-            await interaction.response.send_message("_ _\n\nNo one won. All players scored 0 points.\n\n _ _")
+            await interaction.response.send_message("_ _\nNo one won. All players scored 0 points.\n _ _")
     else:
         await interaction.response.send_message("_ _\nNo one scored any points.\n")
 
@@ -508,7 +508,7 @@ async def stop(interaction: discord.Interaction):
     leaderboard = "\n".join([f"{idx+1}. {player[0] if player[0] else 'No player'} - {player[1]} points" for idx, player in enumerate(top_players)])
 
     # Use channel for additional responses after the first one
-    await interaction.channel.send(f"_ _\n\n**FINAL Leaderboard:**\n{leaderboard}\n\n")
+    await interaction.channel.send(f"**FINAL Leaderboard:**\n{leaderboard}\n\n")
 
 
 # Play command with autocomplete for song names
