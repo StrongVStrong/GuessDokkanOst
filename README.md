@@ -19,3 +19,7 @@
 
 ## To run yourself
  Change the bot token to your own from the discord application you create in the discord dev portal
+
+## Creation Process
+ Check out how I made the program and my thought process here:
+ [![Watch the video](https://img.youtube.com/vi/25pOxgGiDLY/0.jpg)](https://www.youtube.com/watch?v=25pOxgGiDLY)
