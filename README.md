@@ -10,8 +10,7 @@
 - **/loop** - Infinitely play any Dokkan OST of choice
 
 ## Requirements
- - Create a discord account
- - (Optional) Be able to type out commands
+ - A discord account
 
 ## Get started
  To get started, join the community server or invite the bot to a server of your choice here:
